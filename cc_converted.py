@@ -11,9 +11,12 @@ emotion_train=pd.read_csv("Dataset/emotion/train.csv")
 
 import re
 import emoji
+from indicnlp.normalize.indic_normalize import IndicNormalizerFactory
+
+normalizer = IndicNormalizerFactory().get_normalizer("mr")
 def clean_text(text):
+    text = normalizer.normalize(text)
     text = re.sub(r"http\S+|@\w+|#[A-Za-z0-9_]+", "", text)
-    text = re.sub(r"[^\w\s]", "", text)
     return text.strip().lower()
 
 emotion_train['Tweet'] =emotion_train['Tweet'].astype(str).apply(clean_text)
@@ -62,7 +65,7 @@ def chatbot():
     print("Type 'exit' to stop.\n")
     while True:
         user_input = input("📥 तुमचं वाक्य: ")
-        if user_input.lower() == ['exit','quit']:
+        if user_input.lower() in ['exit','quit']:
             break
         
         cleaned = clean_text(user_input)
