@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ChatBot - Emotion & Hate Detector</title>
+  <style>
+    body {
+      background: #eaf3ff;
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+       height: 100vh;
+    }
+
+    .chat-container {
+      width: 400px;
+      height: 600px;
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .chat-header {
+      background: linear-gradient(45deg, #3b82f6, #60a5fa);
+      color: white;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .chat-header h3 {
+      margin: 0;
+    }
+
+    .dark-toggle {
+      background: rgba(255, 255, 255, 0.3);
+      border: none;
+      border-radius: 12px;
+      padding: 5px 10px;
+      color: white;
+      cursor: pointer;
+    }
+
+    .chat-body {
+      flex: 1;
+      padding: 15px;
+      overflow-y: auto;
+    }
+
+    .message {
+      margin-bottom: 12px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      max-width: 80%;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .user-msg {
+      background-color: #3b82f6;
+      color: white;
+      align-self: flex-end;
+    }
+
+    .bot-msg {
+      background-color: #f0f4ff;
+      color: #111827;
+      align-self: flex-start;
+    }
+
+    .chat-footer {
+      padding: 10px;
+      border-top: 1px solid #e5e7eb;
+      display: flex;
+      gap: 10px;
+    }
+
+    .chat-footer input {
+      flex: 1;
+      border: 1px solid #d1d5db;
+      padding: 10px;
+      border-radius: 20px;
+      outline: none;
+    }
+
+    .chat-footer button {
+      background-color: #3b82f6;
+      border: none;
+      color: white;
+      padding: 10px 16px;
+      border-radius: 50%;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    /* Dark Mode */
+    .dark-mode {
+      background: #1e293b;
+      color: white;
+    }
+
+    .dark-mode .chat-container {
+      background: #0f172a;
+    }
+
+    .dark-mode .chat-header {
+      background: linear-gradient(45deg, #334155, #475569);
+    }
+
+    .dark-mode .chat-body {
+      background: #0f172a;
+    }
+
+    .dark-mode .bot-msg {
+      background: #1e293b;
+      color: white;
+    }
+
+    .dark-mode .chat-footer {
+      border-top: 1px solid #334155;
+    }
+
+    .dark-mode .chat-footer input {
+      background: #1e293b;
+      color: white;
+      border: 1px solid #475569;
+    }
+
+    .dark-mode .chat-footer button {
+      background-color: #60a5fa;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="chat-container">
+    <div class="chat-header">
+      <h3>BhavMeter</h3>
+      <button class="dark-toggle" onclick="toggleDarkMode()">☀️ / 🌙</button>
+    </div>
+    <div class="chat-body" id="chatBody">
+      <div class="message bot-msg">👋 Hi! I’m your emotion & hate detector bot. Type something!</div>
+    </div>
+    <div class="chat-footer">
+      <input type="text" id="userInput" placeholder="Type your message..." />
+      <button onclick="sendMessage()">➤</button>
+    </div>
+  </div>
+
+  <script>
+    function sendMessage() {
+      const input = document.getElementById("userInput");
+      const chatBody = document.getElementById("chatBody");
+
+      const userMsg = input.value.trim();
+      if (userMsg === "") return;
+
+      const userDiv = document.createElement("div");
+      userDiv.classList.add("message", "user-msg");
+      userDiv.textContent = userMsg;
+      chatBody.appendChild(userDiv);
+
+      // Simulated bot response (replace with backend call)
+      const botDiv = document.createElement("div");
+      botDiv.classList.add("message", "bot-msg");
+      botDiv.textContent = getBotReply(userMsg); // mock logic
+      chatBody.appendChild(botDiv);
+
+      input.value = "";
+      chatBody.scrollTop = chatBody.scrollHeight;
+    }
+
+    function getBotReply(msg) {
+      // This is mock logic — you should replace this with actual backend call
+      if (msg.includes("hate")) return "⚠️ Detected hate speech.";
+      if (msg.includes("angry")) return "😠 Emotion detected: Anger.";
+      if (msg.includes("happy")) return "😊 Emotion detected: Happiness.";
+      return "🤖 Processing... (connect to backend for real response)";
+    }
+
+    function toggleDarkMode() {
+      document.body.classList.toggle("dark-mode");
+    }
+  </script>
+</body>
+</html>
