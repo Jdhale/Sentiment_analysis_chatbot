@@ -49,9 +49,7 @@ from plotly.subplots import make_subplots
 # valid_df = valid_df.reset_index(drop=True)
 # test_df = test_df.dropna()
 # test_df = test_df.drop_duplicates()
-# test_df = test_df.reset_index(drop=True)
-
-
+# test_df = 
 
 # For BERT models (optional - requires transformers library)
 try:
