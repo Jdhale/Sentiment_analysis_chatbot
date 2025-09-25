@@ -411,9 +411,6 @@ class MarathiTextClassifier:
         
         return prediction, prob_dict
 
-#adding l3cude 
-class BERT:
-    pass
 class BERTMarathiClassifier:
     """BERT-based classifier for Marathi sentiment analysis"""
     
@@ -423,57 +420,106 @@ class BERTMarathiClassifier:
         self.pipeline = None
         self.is_trained = False
         
-    def load_pretrained_model(self, model_name="l3cube-pune/marathi-bert"):
-        """Load a pre-trained Marathi BERT model"""
+    def load_pretrained_model(self, model_name="ai4bharat/indic-bert"):
+        """Load a pre-trained BERT model for Indic languages with detailed error handling"""
         try:
             if not BERT_AVAILABLE:
                 raise ImportError("Transformers library not available")
             
-            logger.info(f"Loading Marathi BERT model: {model_name}")
+            logger.info(f"Loading BERT model: {model_name}")
             
-            # Try different approaches for model loading
+            # First try to load tokenizer with detailed error handling
             try:
-                # First try: Load as sequence classification
-                self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
-                
-            except:
-                try:
-                    # Second try: Load base model and add classification head
-                    from transformers import BertForSequenceClassification
-                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                    self.model = BertForSequenceClassification.from_pretrained(
-                        model_name, 
-                        num_labels=8  # Adjust based on your labels
-                    )
-                except:
-                    # Third try: Use pipeline approach with a model that supports zero-shot classification
-                    self.pipeline = pipeline(
-                        "zero-shot-classification",
-                        model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
-                        tokenizer="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
-                    )
-                    self.is_trained = True
-                    return True
-            
-            # If we successfully loaded a model, create a pipeline
-            if self.model and self.tokenizer:
-                self.pipeline = pipeline(
-                    "text-classification",
-                    model=self.model,
-                    tokenizer=self.tokenizer
+                st.info(f"Loading tokenizer for {model_name}...")
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    model_name,
+                    cache_dir="./model_cache",  # Local cache directory
+                    local_files_only=False,     # Allow downloads
+                    trust_remote_code=False     # Security setting
                 )
+                st.success("Tokenizer loaded successfully!")
+            except Exception as e:
+                st.error(f"Failed to load tokenizer: {str(e)}")
+                logger.error(f"Tokenizer error: {str(e)}")
+                return False
+            
+            # Then try to load model
+            try:
+                st.info(f"Loading model {model_name}...")
+                
+                # For pretrained models, we'll use them as feature extractors
+                # rather than trying to fine-tune for classification
+                self.model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    cache_dir="./model_cache",
+                    local_files_only=False,
+                    trust_remote_code=False,
+                    ignore_mismatched_sizes=True,
+                    # Use a generic number of labels - we'll interpret outputs differently
+                    num_labels=3  # Positive, Negative, Neutral as base
+                )
+                st.success("Model loaded successfully!")
+            except Exception as e:
+                st.error(f"Failed to load model: {str(e)}")
+                logger.error(f"Model error: {str(e)}")
+                # Try a simpler approach - just use for embeddings
+                try:
+                    st.info("Trying alternative loading approach...")
+                    from transformers import AutoModel
+                    self.model = AutoModel.from_pretrained(
+                        model_name,
+                        cache_dir="./model_cache",
+                        local_files_only=False
+                    )
+                    st.success("Model loaded in embedding mode!")
+                except Exception as e2:
+                    st.error(f"Alternative loading failed: {str(e2)}")
+                    return False
+            
+            # Create a simple sentiment pipeline
+            try:
+                # Create a basic pipeline for sentiment analysis
+                self.pipeline = pipeline(
+                    "sentiment-analysis",  # Use generic sentiment analysis
+                    model=self.model,
+                    tokenizer=self.tokenizer,
+                    return_all_scores=True,
+                    max_length=512,
+                    truncation=True
+                )
+                st.success("Pipeline created successfully!")
+            except Exception as e:
+                st.error(f"Pipeline creation failed: {str(e)}")
+                # Fallback to manual prediction
+                self.pipeline = None
+                st.warning("Using manual prediction mode")
             
             self.is_trained = True
             return True
             
+        except ImportError as e:
+            st.error("Transformers library not installed. Install with: pip install transformers torch")
+            logger.error(f"Import error: {str(e)}")
+            return False
         except Exception as e:
-            logger.error(f"Error loading Marathi BERT model: {str(e)}")
-            st.error(f"BERT Loading Error: {str(e)}")
+            st.error(f"Unexpected error loading BERT model: {str(e)}")
+            logger.error(f"Unexpected BERT error: {str(e)}")
+            
+            # Provide specific troubleshooting based on error type
+            error_str = str(e).lower()
+            if "connection" in error_str or "timeout" in error_str:
+                st.error("Network connection issue. Try:")
+                st.code("pip install --upgrade transformers torch")
+                st.code("# Or try offline mode with pre-downloaded models")
+            elif "memory" in error_str or "cuda" in error_str:
+                st.error("Memory/GPU issue. Try using CPU mode or a smaller model.")
+            elif "token" in error_str:
+                st.error("Authentication issue. Some models require Hugging Face login.")
+            
             return False
     
     def predict(self, text):
-        """Predict sentiment using BERT model"""
+        """Predict sentiment using BERT model with fallback options"""
         if not self.is_trained:
             return "Model not loaded", {}
         
@@ -481,47 +527,91 @@ class BERTMarathiClassifier:
             # Preprocess text
             processed_text = MarathiTextProcessor.preprocess_marathi_text(text)
             
-            if not processed_text.strip():
+            if not processed_text:
                 return "Neutral", {"Neutral": 1.0}
             
-            # Define possible labels based on your dataset
-            candidate_labels = [
-                "Anger", "Disgust", "Surprise", "Sadness", 
-                "Neutral", "Sarcasm", "Fear", "Pride", "HOF", "Joy"
-            ]
+            # Try pipeline prediction first
+            if self.pipeline is not None:
+                try:
+                    results = self.pipeline(processed_text)
+                    
+                    # Handle different pipeline output formats
+                    if isinstance(results, list) and len(results) > 0:
+                        if isinstance(results[0], list):
+                            # Multiple scores format
+                            prob_dict = {result['label']: result['score'] for result in results[0]}
+                        else:
+                            # Single result format
+                            prob_dict = {results[0]['label']: results[0]['score']}
+                            if len(results) > 1:
+                                for result in results[1:]:
+                                    prob_dict[result['label']] = result['score']
+                    else:
+                        prob_dict = {"Neutral": 1.0}
+                    
+                    # Map generic sentiment labels to emotion categories
+                    emotion_mapping = {
+                        'POSITIVE': 'Pride',
+                        'NEGATIVE': 'Sadness', 
+                        'NEUTRAL': 'Neutral',
+                        'LABEL_0': 'Neutral',
+                        'LABEL_1': 'Positive',
+                        'LABEL_2': 'Negative'
+                    }
+                    
+                    # Remap probabilities to emotions
+                    emotion_probs = {}
+                    for label, score in prob_dict.items():
+                        emotion = emotion_mapping.get(label, label)
+                        emotion_probs[emotion] = score
+                    
+                    best_prediction = max(emotion_probs, key=emotion_probs.get)
+                    return best_prediction, emotion_probs
+                    
+                except Exception as e:
+                    st.warning(f"Pipeline prediction failed: {str(e)}")
+                    # Fall through to manual prediction
             
-            if hasattr(self, 'pipeline') and self.pipeline:
-                # Use zero-shot classification if available
-                if self.pipeline.task == "zero-shot-classification":
-                    result = self.pipeline(processed_text, candidate_labels)
-                    prediction = result['labels'][0]
-                    prob_dict = dict(zip(result['labels'], result['scores']))
-                else:
-                    # Use regular text classification
-                    result = self.pipeline(processed_text)[0]
-                    prediction = result['label']
-                    prob_dict = {prediction: result['score']}
-            else:
-                # Fallback to manual prediction
-                inputs = self.tokenizer(processed_text, return_tensors="pt", truncation=True, padding=True)
-                with torch.no_grad():
-                    outputs = self.model(**inputs)
-                    probabilities = torch.nn.functional.softmax(outputs.logits, dim=-1)
-                    predicted_class_id = probabilities.argmax().item()
-                
-                # Map prediction to label (you'll need to adjust this based on your label mapping)
-                label_map = {0: "Negative", 1: "Positive", 2: "Neutral"}  # Adjust this!
-                prediction = label_map.get(predicted_class_id, "Neutral")
-                logger.info(f"Prediction: {prediction}")
-                prob_dict = {prediction: probabilities[0][predicted_class_id].item()}
+            # Manual prediction using model directly
+            if self.model is not None and self.tokenizer is not None:
+                try:
+                    # Tokenize input
+                    inputs = self.tokenizer(
+                        processed_text, 
+                        return_tensors="pt", 
+                        max_length=512, 
+                        truncation=True, 
+                        padding=True
+                    )
+                    
+                    # Get model outputs
+                    with torch.no_grad():
+                        outputs = self.model(**inputs)
+                        predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
+                        
+                    # Convert to probabilities
+                    probs = predictions[0].cpu().numpy()
+                    
+                    # Create basic emotion mapping
+                    if len(probs) >= 3:
+                        emotions = ['Negative', 'Neutral', 'Positive'][:len(probs)]
+                    else:
+                        emotions = [f'Emotion_{i}' for i in range(len(probs))]
+                    
+                    prob_dict = dict(zip(emotions, probs))
+                    best_prediction = max(prob_dict, key=prob_dict.get)
+                    
+                    return best_prediction, prob_dict
+                    
+                except Exception as e:
+                    st.warning(f"Manual prediction failed: {str(e)}")
             
-            return prediction, prob_dict
+            # Final fallback
+            return "Neutral", {"Neutral": 1.0}
             
         except Exception as e:
             logger.error(f"BERT prediction error: {str(e)}")
-            return "Error", {"Error": 1.0} 
-
-
+            return "Error", {"Error": 1.0}
 
 def get_emotion_color(emotion):
     """Get color for emotion visualization"""
@@ -550,6 +640,63 @@ def create_emotion_badge(emotion, confidence=None):
     confidence_text = f" ({confidence:.2%})" if confidence else ""
     return f'<span class="emotion-badge" style="background-color: {color};">{emotion}{confidence_text}</span>'
 
+class SimpleBERTAlternative:
+    """Simple rule-based classifier as BERT alternative"""
+    
+    def __init__(self):
+        self.is_trained = True
+        
+        # Marathi emotion keywords (basic lexicon)
+        self.emotion_keywords = {
+            'Anger': ['राग', 'क्रोध', 'चिडून', 'वाईट', 'त्रास', 'गुस्सा', 'खराब'],
+            'Sadness': ['दुःख', 'उदास', 'अशी', 'रडू', 'निराश', 'दु:खी', 'वाईट वाटत'],
+            'Joy': ['आनंद', 'खुश', 'छान', 'खुशी', 'हर्ष', 'मजा', 'सुंदर'],
+            'Fear': ['भीती', 'घाबरत', 'डरत', 'काळजी', 'चिंता', 'भयानक'],
+            'Surprise': ['आश्चर्य', 'वाह', 'अरे', 'काय', 'नक्की', 'विचित्र'],
+            'Pride': ['गर्व', 'अभिमान', 'श्रेष्ठ', 'उत्तम', 'यशस्वी', 'मान'],
+            'Disgust': ['तिरस्कार', 'घृणा', 'वाईट', 'चूक', 'अशुद्ध'],
+            'Neutral': ['ठीक', 'सामान्य', 'असं', 'काहीतरी', 'बरं']
+        }
+    
+    def predict(self, text):
+        """Simple rule-based prediction"""
+        try:
+            processed_text = MarathiTextProcessor.preprocess_marathi_text(text).lower()
+            
+            if not processed_text:
+                return "Neutral", {"Neutral": 1.0}
+            
+            emotion_scores = {}
+            
+            # Count keyword matches for each emotion
+            for emotion, keywords in self.emotion_keywords.items():
+                score = 0
+                for keyword in keywords:
+                    if keyword.lower() in processed_text:
+                        score += 1
+                emotion_scores[emotion] = score
+            
+            # If no keywords found, return neutral
+            if sum(emotion_scores.values()) == 0:
+                return "Neutral", {"Neutral": 1.0}
+            
+            # Normalize scores to probabilities
+            total_score = sum(emotion_scores.values())
+            prob_dict = {emotion: score/total_score for emotion, score in emotion_scores.items() if score > 0}
+            
+            # Add remaining emotions with small probability
+            for emotion in self.emotion_keywords.keys():
+                if emotion not in prob_dict:
+                    prob_dict[emotion] = 0.01
+            
+            best_prediction = max(prob_dict, key=prob_dict.get)
+            
+            return best_prediction, prob_dict
+            
+        except Exception as e:
+            return "Error", {"Error": 1.0}
+
+# Update the session state initialization to include this alternative
 def main():
     # Main title
     st.markdown('<h1 class="main-header">🎭 Marathi Sentiment Analysis Dashboard</h1>', unsafe_allow_html=True)
@@ -566,6 +713,8 @@ def main():
         st.session_state.classifier = MarathiTextClassifier()
     if 'bert_classifier' not in st.session_state:
         st.session_state.bert_classifier = BERTMarathiClassifier()
+    if 'simple_bert_alternative' not in st.session_state:
+        st.session_state.simple_bert_alternative = SimpleBERTAlternative()
     if 'models_trained' not in st.session_state:
         st.session_state.models_trained = False
     if 'bert_loaded' not in st.session_state:
@@ -596,15 +745,15 @@ def show_home_page():
     - **Ensemble Model**: Voting classifier combining best performers
     - **BERT Model**: State-of-the-art transformer model for Indic languages
     
-    
+    ### 📊 Supported Emotions:
     """)
     
-    # emotions = ["Anger/Disgust", "Surprise", "Sadness", "Neutral", "Sarcasm", "Fear", "Pride", "HOF"]
+    emotions = ["Anger/Disgust", "Surprise", "Sadness", "Neutral", "Sarcasm", "Fear", "Pride", "HOF"]
     
-    # cols = st.columns(4)
-    # for i, emotion in enumerate(emotions):
-    #     with cols[i % 4]:
-    #         st.markdown(create_emotion_badge(emotion), unsafe_allow_html=True)
+    cols = st.columns(4)
+    for i, emotion in enumerate(emotions):
+        with cols[i % 4]:
+            st.markdown(create_emotion_badge(emotion), unsafe_allow_html=True)
     
     st.markdown("""
     
@@ -765,6 +914,67 @@ def show_training_page():
                         fig.update_layout(height=400, showlegend=False)
                         st.plotly_chart(fig, use_container_width=True)
                         
+                        # Add detailed classification report
+                        st.markdown("### 📋 Detailed Classification Report")
+                        
+                        # Generate classification report for the best model
+                        best_model_name = max(f1_scores.keys(), key=f1_scores.get)
+                        best_model = models[best_model_name]
+                        
+                        if hasattr(best_model, 'predict'):
+                            y_pred_best = best_model.predict(X_test)
+                            
+                            # Classification report
+                            report = classification_report(y_test, y_pred_best, output_dict=True)
+                            report_df = pd.DataFrame(report).transpose()
+                            
+                            # Display metrics for each class
+                            st.dataframe(report_df.round(3))
+                            
+                            # Confusion Matrix
+                            st.markdown("### 🔍 Confusion Matrix (Best Model)")
+                            cm = confusion_matrix(y_test, y_pred_best)
+                            
+                            # Create labels
+                            unique_labels = sorted(list(set(y_test) | set(y_pred_best)))
+                            
+                            fig_cm = px.imshow(cm, 
+                                             x=unique_labels, 
+                                             y=unique_labels,
+                                             aspect="auto",
+                                             title=f"Confusion Matrix - {best_model_name}",
+                                             color_continuous_scale="Blues")
+                            
+                            fig_cm.update_layout(
+                                xaxis_title="Predicted",
+                                yaxis_title="Actual",
+                                width=600,
+                                height=600
+                            )
+                            st.plotly_chart(fig_cm, use_container_width=True)
+                            
+                            # Identify problematic classes
+                            st.markdown("### ⚠️ Performance Issues")
+                            
+                            # Find classes with low F1 scores
+                            class_f1_scores = {label: report[label]['f1-score'] 
+                                             for label in unique_labels 
+                                             if label in report and isinstance(report[label], dict)}
+                            
+                            low_performing = {k: v for k, v in class_f1_scores.items() if v < 0.6}
+                            
+                            if low_performing:
+                                st.warning(f"Classes with low F1 scores (< 0.6): {list(low_performing.keys())}")
+                                
+                                # Suggest improvements
+                                st.markdown("**Suggested Improvements:**")
+                                st.markdown("- Collect more data for underperforming classes")
+                                st.markdown("- Consider data augmentation techniques")
+                                st.markdown("- Review text quality for these classes")
+                                st.markdown("- Try different preprocessing approaches")
+                            else:
+                                st.success("All classes performing reasonably well!")
+                        
                     except Exception as e:
                         st.error(f"❌ Error training models: {str(e)}")
         
@@ -773,30 +983,91 @@ def show_training_page():
         # BERT Model Section
         st.markdown("### 🤗 BERT Model")
         
-        # bert_model_name = st.selectbox("Select BERT Model", [
-        #     "ai4bharat/indic-bert",
-        #     "google/muril-base-cased",
-        #     "bert-base-multilingual-cased"
-        # ])
-
-        bert_model_name = st.selectbox("Select BERT Model", [
-    "l3cube-pune/marathi-bert",           # Marathi-specific BERT
-    "ai4bharat/indic-bert",               # General Indic languages
-    "bert-base-multilingual-cased",       # Multilingual BERT
-    "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"  # Zero-shot model
-        ])
+        # Add more model options with descriptions
+        bert_models = {
+            "ai4bharat/indic-bert": "IndicBERT - Optimized for Indian languages",
+            "google/muril-base-cased": "MuRIL - Multilingual model by Google",
+            "bert-base-multilingual-cased": "BERT Multilingual - General purpose",
+            "microsoft/mdeberta-v3-base": "mDeBERTa - Microsoft's multilingual model",
+            "xlm-roberta-base": "XLM-RoBERTa - Facebook's multilingual model"
+        }
         
-        if st.button("🔥 Load BERT Model", type="primary"):
-            if not BERT_AVAILABLE:
-                st.error("❌ Transformers library not available. Please install: pip install transformers torch")
-            else:
-                with st.spinner("Loading BERT model... This may take a few minutes."):
-                    success = st.session_state.bert_classifier.load_pretrained_model(bert_model_name)
-                    if success:
-                        st.session_state.bert_loaded = True
-                        st.success("✅ BERT model loaded successfully!")
-                    else:
-                        st.error("❌ Failed to load BERT model. Check your internet connection.")
+        selected_model = st.selectbox(
+            "Select BERT Model", 
+            list(bert_models.keys()),
+            format_func=lambda x: bert_models[x]
+        )
+        
+        # Show model details
+        st.info(f"Selected: {bert_models[selected_model]}")
+        
+        # Add troubleshooting section
+        with st.expander("🔧 Troubleshooting BERT Issues"):
+            st.markdown("""
+            **Common Issues and Solutions:**
+            
+            1. **Network/Connection Issues:**
+               - Check internet connection
+               - Try: `pip install --upgrade transformers torch`
+               - Use VPN if models are blocked in your region
+            
+            2. **Memory Issues:**
+               - Close other applications
+               - Try a smaller model like `bert-base-multilingual-cased`
+               - Restart your Python kernel
+            
+            3. **Installation Issues:**
+               ```bash
+               pip install transformers==4.21.0 torch==1.12.0
+               # Or for latest versions:
+               pip install transformers torch --upgrade
+               ```
+            
+            4. **Authentication Issues:**
+               - Some models may require Hugging Face login
+               - Create account at huggingface.co if needed
+            
+            5. **Offline Mode:**
+               - Download models manually and place in `./model_cache/`
+               - Models will be cached after first successful download
+            """)
+        
+        col_bert1, col_bert2 = st.columns(2)
+        
+        with col_bert1:
+            if st.button("🔥 Load BERT Model", type="primary"):
+                if not BERT_AVAILABLE:
+                    st.error("❌ Transformers library not available.")
+                    st.code("pip install transformers torch")
+                    st.info("After installation, restart your Streamlit app")
+                else:
+                    with st.spinner("Loading BERT model... This may take several minutes for first-time download."):
+                        success = st.session_state.bert_classifier.load_pretrained_model(selected_model)
+                        if success:
+                            st.session_state.bert_loaded = True
+                        # Error messages are already shown in the load_pretrained_model method
+        
+        with col_bert2:
+            if st.button("🧪 Test BERT Installation"):
+                st.info("Testing transformers installation...")
+                try:
+                    import transformers
+                    import torch
+                    st.success(f"✅ Transformers: {transformers.__version__}")
+                    st.success(f"✅ PyTorch: {torch.__version__}")
+                    
+                    # Test basic functionality
+                    from transformers import pipeline
+                    test_pipeline = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
+                    result = test_pipeline("This is a test")
+                    st.success("✅ Basic pipeline test passed")
+                    
+                except ImportError as e:
+                    st.error(f"❌ Import error: {e}")
+                    st.code("pip install transformers torch")
+                except Exception as e:
+                    st.error(f"❌ Test failed: {e}")
+                    st.info("Try restarting your Python environment")
     
     with col2:
         st.markdown("### 📈 Training Status")
@@ -835,21 +1106,26 @@ def show_prediction_page():
         height=150
     )
     
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         traditional_model = st.selectbox("Traditional ML Model", 
-                                       ["Logistic Regression", "Ensemble", "Naive Bayes", 
+                                       ["Ensemble", "Logistic Regression", "Naive Bayes", 
                                         "Linear SVM", "SGD Classifier", "Random Forest"])
     
     with col2:
         use_bert = st.checkbox("Use BERT Model", value=True)
     
+    with col3:
+        use_simple_alternative = st.checkbox("Use Rule-based Alternative", 
+                                           value=not st.session_state.bert_loaded,
+                                           help="Simple rule-based classifier using Marathi keywords")
+    
     if st.button("🎯 Analyze Sentiment", type="primary"):
         if not user_text.strip():
             st.warning("Please enter some text to analyze!")
         else:
-            analysis_cols = st.columns(2)
+            analysis_cols = st.columns(3 if use_simple_alternative else 2)
             
             # Traditional ML Analysis
             with analysis_cols[0]:
@@ -876,29 +1152,53 @@ def show_prediction_page():
                     st.warning("⚠️ Traditional models not trained yet!")
             
             # BERT Analysis
-            with analysis_cols[1]:
-                st.markdown("### 🤗 BERT Results")
-                
-                if use_bert and st.session_state.bert_loaded:
+            col_idx = 1
+            if use_bert:
+                with analysis_cols[col_idx]:
+                    st.markdown("### 🤗 BERT Results")
+                    
+                    if st.session_state.bert_loaded:
+                        try:
+                            with st.spinner("Analyzing with BERT..."):
+                                bert_prediction, bert_probabilities = st.session_state.bert_classifier.predict(user_text)
+                            
+                            st.markdown(f"**Predicted Emotion**: {create_emotion_badge(bert_prediction)}", 
+                                      unsafe_allow_html=True)
+                            
+                            # Show confidence scores
+                            st.markdown("**Confidence Scores:**")
+                            for emotion, confidence in sorted(bert_probabilities.items(), 
+                                                            key=lambda x: x[1], reverse=True):
+                                st.progress(confidence, text=f"{emotion}: {confidence:.2%}")
+                            
+                        except Exception as e:
+                            st.error(f"Error in BERT prediction: {str(e)}")
+                    else:
+                        st.warning("⚠️ BERT model not loaded yet!")
+                col_idx += 1
+            
+            # Simple Alternative Analysis
+            if use_simple_alternative:
+                with analysis_cols[col_idx]:
+                    st.markdown("### 📝 Rule-based Results")
+                    
                     try:
-                        with st.spinner("Analyzing with BERT..."):
-                            bert_prediction, bert_probabilities = st.session_state.bert_classifier.predict(user_text)
+                        simple_prediction, simple_probabilities = st.session_state.simple_bert_alternative.predict(user_text)
                         
-                        st.markdown(f"**Predicted Emotion**: {create_emotion_badge(bert_prediction)}", 
+                        st.markdown(f"**Predicted Emotion**: {create_emotion_badge(simple_prediction)}", 
                                   unsafe_allow_html=True)
                         
                         # Show confidence scores
                         st.markdown("**Confidence Scores:**")
-                        for emotion, confidence in sorted(bert_probabilities.items(), 
-                                                        key=lambda x: x[1], reverse=True):
-                            st.progress(confidence, text=f"{emotion}: {confidence:.2%}")
+                        for emotion, confidence in sorted(simple_probabilities.items(), 
+                                                        key=lambda x: x[1], reverse=True)[:5]:  # Top 5
+                            if confidence > 0.01:  # Only show meaningful scores
+                                st.progress(confidence, text=f"{emotion}: {confidence:.2%}")
+                        
+                        st.info("Uses Marathi keyword matching")
                         
                     except Exception as e:
-                        st.error(f"Error in BERT prediction: {str(e)}")
-                elif use_bert and not st.session_state.bert_loaded:
-                    st.warning("⚠️ BERT model not loaded yet!")
-                else:
-                    st.info("BERT analysis disabled")
+                        st.error(f"Error in rule-based prediction: {str(e)}")
     
     # Sample texts for testing
     st.markdown("---")
