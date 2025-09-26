@@ -411,6 +411,36 @@ class MarathiTextClassifier:
         
         return prediction, prob_dict
 
+# Cached BERT model loading function (similar to app2.py)
+@st.cache_resource
+def load_bert_model_cached(model_name="l3cube-pune/marathi-sentiment-tweets"):
+    """Load pre-trained Marathi BERT model for sentiment analysis with caching"""
+    if not BERT_AVAILABLE:
+        return None
+    
+    try:
+        # Try to load L3Cube Marathi BERT model (same as app2.py)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        sentiment_pipeline = pipeline("sentiment-analysis", 
+                                    model=model, 
+                                    tokenizer=tokenizer)
+        return sentiment_pipeline
+    except Exception as e:
+        logger.warning(f"Could not load BERT model {model_name}: {str(e)}")
+        return None
+
+def apply_bert_mapping(prediction, prob_dict):
+    """Apply custom mapping for BERT predictions: Positive -> NOT, Negative -> HOF"""
+    if prediction == "Positive":
+        prediction = "NOT"
+        prob_dict = {"NOT": prob_dict.get("Positive", 0)}
+    elif prediction == "Negative":
+        prediction = "HOF"
+        prob_dict = {"HOF": prob_dict.get("Negative", 0)}
+    
+    return prediction, prob_dict
+
 #adding l3cude 
 class BERT:
     pass
@@ -418,54 +448,67 @@ class BERTMarathiClassifier:
     """BERT-based classifier for Marathi sentiment analysis"""
     
     def __init__(self):
-        self.model = None
-        self.tokenizer = None
         self.pipeline = None
         self.is_trained = False
         
-    def load_pretrained_model(self, model_name="l3cube-pune/marathi-bert"):
-        """Load a pre-trained Marathi BERT model"""
+    def load_pretrained_model(self, model_name="l3cube-pune/marathi-sentiment-tweets"):
+        """Load a pre-trained Marathi BERT model using the same approach as app2.py"""
         try:
             if not BERT_AVAILABLE:
                 raise ImportError("Transformers library not available")
             
             logger.info(f"Loading Marathi BERT model: {model_name}")
             
-            # Try different approaches for model loading
+            # Use the same approach as app2.py - load L3Cube Marathi sentiment model
             try:
-                # First try: Load as sequence classification
-                self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+                tokenizer = AutoTokenizer.from_pretrained(model_name)
+                model = AutoModelForSequenceClassification.from_pretrained(model_name)
+                self.pipeline = pipeline("sentiment-analysis", 
+                                       model=model, 
+                                       tokenizer=tokenizer)
+                self.is_trained = True
+                logger.info("Successfully loaded BERT model")
+                return True
                 
-            except:
+            except Exception as e:
+                logger.error(f"Error loading specific model {model_name}: {str(e)}")
+                
+                # Fallback: Try alternative models
+                fallback_models = [
+                    "l3cube-pune/marathi-bert",
+                    "ai4bharat/indic-bert",
+                    "bert-base-multilingual-cased"
+                ]
+                
+                for fallback_model in fallback_models:
+                    try:
+                        logger.info(f"Trying fallback model: {fallback_model}")
+                        tokenizer = AutoTokenizer.from_pretrained(fallback_model)
+                        model = AutoModelForSequenceClassification.from_pretrained(fallback_model)
+                        self.pipeline = pipeline("sentiment-analysis", 
+                                               model=model, 
+                                               tokenizer=tokenizer)
+                        self.is_trained = True
+                        logger.info(f"Successfully loaded fallback model: {fallback_model}")
+                        return True
+                    except Exception as fallback_error:
+                        logger.warning(f"Fallback model {fallback_model} failed: {str(fallback_error)}")
+                        continue
+                
+                # If all models fail, use zero-shot classification as last resort
                 try:
-                    # Second try: Load base model and add classification head
-                    from transformers import BertForSequenceClassification
-                    self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                    self.model = BertForSequenceClassification.from_pretrained(
-                        model_name, 
-                        num_labels=8  # Adjust based on your labels
-                    )
-                except:
-                    # Third try: Use pipeline approach with a model that supports zero-shot classification
+                    logger.info("Trying zero-shot classification as last resort")
                     self.pipeline = pipeline(
                         "zero-shot-classification",
                         model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
                         tokenizer="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
                     )
                     self.is_trained = True
+                    logger.info("Successfully loaded zero-shot classification model")
                     return True
-            
-            # If we successfully loaded a model, create a pipeline
-            if self.model and self.tokenizer:
-                self.pipeline = pipeline(
-                    "text-classification",
-                    model=self.model,
-                    tokenizer=self.tokenizer
-                )
-            
-            self.is_trained = True
-            return True
+                except Exception as zero_shot_error:
+                    logger.error(f"Zero-shot classification also failed: {str(zero_shot_error)}")
+                    raise Exception("All BERT model loading attempts failed")
             
         except Exception as e:
             logger.error(f"Error loading Marathi BERT model: {str(e)}")
@@ -473,8 +516,8 @@ class BERTMarathiClassifier:
             return False
     
     def predict(self, text):
-        """Predict sentiment using BERT model"""
-        if not self.is_trained:
+        """Predict sentiment using BERT model - same approach as app2.py with custom mapping"""
+        if not self.is_trained or not self.pipeline:
             return "Model not loaded", {}
         
         try:
@@ -484,36 +527,24 @@ class BERTMarathiClassifier:
             if not processed_text.strip():
                 return "Neutral", {"Neutral": 1.0}
             
-            # Define possible labels based on your dataset
-            candidate_labels = [
-                "Anger", "Disgust", "Surprise", "Sadness", 
-                "Neutral", "Sarcasm", "Fear", "Pride", "HOF", "Joy"
-            ]
-            
-            if hasattr(self, 'pipeline') and self.pipeline:
-                # Use zero-shot classification if available
-                if self.pipeline.task == "zero-shot-classification":
-                    result = self.pipeline(processed_text, candidate_labels)
-                    prediction = result['labels'][0]
-                    prob_dict = dict(zip(result['labels'], result['scores']))
-                else:
-                    # Use regular text classification
-                    result = self.pipeline(processed_text)[0]
-                    prediction = result['label']
-                    prob_dict = {prediction: result['score']}
+            # Use the pipeline for prediction (same as app2.py)
+            if hasattr(self.pipeline, 'task') and self.pipeline.task == "zero-shot-classification":
+                # Zero-shot classification
+                candidate_labels = [
+                    "Anger", "Disgust", "Surprise", "Sadness", 
+                    "Neutral", "Sarcasm", "Fear", "Pride", "HOF", "Joy"
+                ]
+                result = self.pipeline(processed_text, candidate_labels)
+                prediction = result['labels'][0]
+                prob_dict = dict(zip(result['labels'], result['scores']))
             else:
-                # Fallback to manual prediction
-                inputs = self.tokenizer(processed_text, return_tensors="pt", truncation=True, padding=True)
-                with torch.no_grad():
-                    outputs = self.model(**inputs)
-                    probabilities = torch.nn.functional.softmax(outputs.logits, dim=-1)
-                    predicted_class_id = probabilities.argmax().item()
-                
-                # Map prediction to label (you'll need to adjust this based on your label mapping)
-                label_map = {0: "Negative", 1: "Positive", 2: "Neutral"}  # Adjust this!
-                prediction = label_map.get(predicted_class_id, "Neutral")
-                logger.info(f"Prediction: {prediction}")
-                prob_dict = {prediction: probabilities[0][predicted_class_id].item()}
+                # Regular sentiment analysis pipeline
+                result = self.pipeline(processed_text)[0]
+                prediction = result['label']
+                prob_dict = {prediction: result['score']}
+            
+            # Apply custom mapping: Positive -> NOT, Negative -> HOF
+            prediction, prob_dict = apply_bert_mapping(prediction, prob_dict)
             
             return prediction, prob_dict
             
@@ -537,8 +568,8 @@ def get_emotion_color(emotion):
         'HOF': '#ff69b4',  # Hall of Fame
         'Joy': '#32cd32',
         'Happy': '#32cd32',
-        'Positive': '#32cd32',
-        'Negative': '#ff4444',
+        'NOT': '#32cd32',
+        'HOF': '#ff4444',
         'Hate': '#8b0000',
         'Civil': '#228b22'
     }
@@ -552,7 +583,7 @@ def create_emotion_badge(emotion, confidence=None):
 
 def main():
     # Main title
-    st.markdown('<h1 class="main-header">🎭 Marathi Sentiment Analysis Dashboard</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🎭 Marathi Hate Sentiment Analysis Dashboard</h1>', unsafe_allow_html=True)
     
     # Sidebar
     st.sidebar.title("Navigation")
@@ -587,7 +618,7 @@ def main():
 def show_home_page():
     """Display the home page"""
     st.markdown("""
-    ## Welcome to Marathi Sentiment Analysis Dashboard! 🚀
+    ## Welcome to Marathi Hate Sentiment Analysis Dashboard! 🚀
     
     This application provides comprehensive sentiment analysis for Marathi text using multiple machine learning approaches:
     
@@ -780,9 +811,10 @@ def show_training_page():
         # ])
 
         bert_model_name = st.selectbox("Select BERT Model", [
-    "l3cube-pune/marathi-bert",           # Marathi-specific BERT
-    "ai4bharat/indic-bert",               # General Indic languages
-    "bert-base-multilingual-cased",       # Multilingual BERT
+    "l3cube-pune/marathi-sentiment-tweets",  # L3Cube Marathi sentiment model (same as app2.py)
+    "l3cube-pune/marathi-bert",              # Marathi-specific BERT
+    "ai4bharat/indic-bert",                 # General Indic languages
+    "bert-base-multilingual-cased",         # Multilingual BERT
     "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"  # Zero-shot model
         ])
         
@@ -791,12 +823,21 @@ def show_training_page():
                 st.error("❌ Transformers library not available. Please install: pip install transformers torch")
             else:
                 with st.spinner("Loading BERT model... This may take a few minutes."):
-                    success = st.session_state.bert_classifier.load_pretrained_model(bert_model_name)
-                    if success:
+                    # Try cached loading first (faster)
+                    cached_pipeline = load_bert_model_cached(bert_model_name)
+                    if cached_pipeline:
+                        st.session_state.bert_classifier.pipeline = cached_pipeline
+                        st.session_state.bert_classifier.is_trained = True
                         st.session_state.bert_loaded = True
                         st.success("✅ BERT model loaded successfully!")
                     else:
-                        st.error("❌ Failed to load BERT model. Check your internet connection.")
+                        # Fallback to the class method
+                        success = st.session_state.bert_classifier.load_pretrained_model(bert_model_name)
+                        if success:
+                            st.session_state.bert_loaded = True
+                            st.success("✅ BERT model loaded successfully!")
+                        else:
+                            st.error("❌ Failed to load BERT model. Check your internet connection.")
     
     with col2:
         st.markdown("### 📈 Training Status")
@@ -901,27 +942,27 @@ def show_prediction_page():
                     st.info("BERT analysis disabled")
     
     # Sample texts for testing
-    st.markdown("---")
-    st.markdown("### 📝 Sample Texts for Testing")
+    # st.markdown("---")
+    # st.markdown("### 📝 Sample Texts for Testing")
     
-    sample_texts = {
-        "Anger": "हे खूप वाईट आहे! मला राग येत आहे.",
-        "Joy": "आज खूप आनंद झाला! छान दिवस होता.",
-        "Sadness": "मला खूप दुःख होत आहे.",
-        "Surprise": "वाह! हे तर आश्चर्यकारक आहे!",
-        "Fear": "मला भीती वाटत आहे.",
-        "Neutral": "आज हवामान सामान्य आहे."
-    }
+    # sample_texts = {
+    #     "Anger": "हे खूप वाईट आहे! मला राग येत आहे.",
+    #     "Joy": "आज खूप आनंद झाला! छान दिवस होता.",
+    #     "Sadness": "मला खूप दुःख होत आहे.",
+    #     "Surprise": "वाह! हे तर आश्चर्यकारक आहे!",
+    #     "Fear": "मला भीती वाटत आहे.",
+    #     "Neutral": "आज हवामान सामान्य आहे."
+    # }
     
-    sample_cols = st.columns(3)
-    for i, (emotion, text) in enumerate(sample_texts.items()):
-        with sample_cols[i % 3]:
-            if st.button(f"{emotion}: {text[:20]}..."):
-                st.session_state.sample_text = text
-                st.rerun()
+    # sample_cols = st.columns(3)
+    # for i, (emotion, text) in enumerate(sample_texts.items()):
+    #     with sample_cols[i % 3]:
+    #         if st.button(f"{emotion}: {text[:20]}..."):
+    #             st.session_state.sample_text = text
+    #             st.rerun()
     
-    if hasattr(st.session_state, 'sample_text'):
-        st.text_area("Selected Sample", value=st.session_state.sample_text, key="sample_display")
+    # if hasattr(st.session_state, 'sample_text'):
+    #     st.text_area("Selected Sample", value=st.session_state.sample_text, key="sample_display")
 
 def show_batch_analysis_page():
     """Display the batch analysis page"""
